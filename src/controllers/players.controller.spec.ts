@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { EventPublisher, BFEventsStore } from '..';
 import { PlayersRepository } from '../infrastructure/player-repository';
-import { PlayerRoutes } from './player-routes';
+import { PlayersController } from './players.controller';
 
-describe('Player Routes', () => {
+describe('Players Controller', () => {
   let eventsStore: BFEventsStore;
   let playersRepository: PlayersRepository;
   let eventPublisher: EventPublisher;
@@ -16,7 +16,7 @@ describe('Player Routes', () => {
   });
 
   it('should initialize', () => {
-    const t = new PlayerRoutes(eventsStore, playersRepository, eventPublisher);
+    const t = new PlayersController(eventsStore, playersRepository, eventPublisher);
     expect(t).not.to.be.undefined;
   });
 });

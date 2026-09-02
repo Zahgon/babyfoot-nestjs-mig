@@ -7,7 +7,7 @@
 ## Goals
 
 - Applying simple CQRS/ES and DDD.
-- Creating a REST API based on Node + Express + TypeScript.
+- Creating a REST API based on Node + NestJS + TypeScript.
 - Unit Testing with coverage > 80%
 - REST API documentation, samples & testing with PostMan + NewMan (CLI automation)
 - Exploring GitHub platform possibilites & integrations (CI/CD, NPM dependencies update Automation, etc.)

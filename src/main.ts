@@ -1,71 +1,29 @@
-import express from 'express';
-import http from 'http';
-import { Routes } from './routes/routes';
-import { Application, Request, Response, Router } from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
+import 'reflect-metadata';
+
+import fastifyHelmet from '@fastify/helmet';
+import { HttpAdapterHost, NestFactory } from '@nestjs/core';
+import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import admin from 'firebase-admin';
 
-function logErrors(err: any, req: Request, res: Response, next: any) {
-  console.error(err.stack);
-  next(err);
-}
+import { AppModule } from './app.module';
+import { ManageErrorFilter } from './filters/manage-error.filter';
 
-function errorHandler(err: any, req: Request, res: Response, next: any) {
-  res.status(500);
-  res.render('error', { error: err });
-}
+export async function createNestApplication(): Promise<NestFastifyApplication> {
+  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
 
-function manageError(err: any, req: Request, res: Response, next: any) {
-  if (err.constructor) {
-    const errorName = err.constructor.name;
-
-    console.log('error: ' + errorName);
-    console.log(err);
-
-    const isLocal =
-      req.socket.remoteAddress &&
-      ['localhost', '::1', '127.0.0.1'].includes(
-        req.socket.remoteAddress
-      );
-    const stack = isLocal ? err.stack!.split('\n') : undefined;
-
-    res.status(400).send({
-      error: err,
-      errorName,
-      stack
-    });
-  } else {
-    next(err);
-  }
-}
-
-function createExpressMiddleware(port: string | number, router: Router): Application {
-  const app = express();
-  app.set('port', port);
-
-  app.use(helmet());
+  await app.register(fastifyHelmet);
   if (process.env.NODE_ENV === 'production') {
     if (!process.env.BABYFOOTAPI_CORS_ORIGINS) {
       console.error('in production mode, you need to specify BABYFOOTAPI_CORS_ORIGINS for CORS!');
       process.exit(1);
     }
-    app.use(cors({ origin: process.env.BABYFOOTAPI_CORS_ORIGINS!.split(' ') }));
+    app.enableCors({ origin: process.env.BABYFOOTAPI_CORS_ORIGINS!.split(' ') });
   } else {
-    app.use(cors());
+    app.enableCors();
   }
 
-  app.use(express.json());
-  app.use(
-    express.urlencoded({
-      extended: false
-    })
-  );
-  app.use('/', router);
-
-  app.use(logErrors);
-  app.use(manageError);
-  app.use(errorHandler);
+  const { httpAdapter } = app.get(HttpAdapterHost);
+  app.useGlobalFilters(new ManageErrorFilter(httpAdapter));
 
   return app;
 }
@@ -97,21 +55,15 @@ function configureFirebaseAdminSDK(): void {
   }
 }
 
-function startServer(app: Application): void {
-  const server = http.createServer(app);
-  server.listen(app.get('port'), () => {
-    console.log('Babyfoot API Express server listening on port ' + app.get('port'));
-  });
+async function startServer(app: NestFastifyApplication, port: string | number): Promise<void> {
+  await app.listen(port, '0.0.0.0');
+  console.log('Babyfoot API NestJS server listening on port ' + port);
 }
 
-export function run(port: string | number) {
-  const routes = new Routes();
-  const router = express.Router();
-  routes.registerRoutes(router);
-
-  const app = createExpressMiddleware(port, router);
+export async function run(port: string | number): Promise<void> {
+  const app = await createNestApplication();
 
   configureFirebaseAdminSDK();
 
-  startServer(app);
+  await startServer(app, port);
 }

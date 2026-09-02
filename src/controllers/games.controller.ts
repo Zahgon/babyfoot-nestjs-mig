@@ -1,67 +1,43 @@
-import { Response, Request, Router } from 'express';
-import { BFEventsStore, EventPublisher, Game, generateUUID, GameId, PositionValue } from '..';
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
+
+import { BFEventsStore, EventPublisher, Game, GameId, PositionValue, generateUUID } from '..';
 import { GamesRepository } from '../infrastructure/game-repository';
 import { GameListItemProjection } from '../domains/game/game-list-item-projection';
 import { TeamColors } from '../domains/game/game-id';
 import { PlayerId } from '../domains/player';
 import { PlayersRepository } from '../infrastructure/player-repository';
-import { checkFirebaseAuthToken } from '../security';
+import { FirebaseAuthGuard } from '../security';
 
-export class GamesRoutes {
+@Controller('api/games')
+@UseGuards(FirebaseAuthGuard)
+export class GamesController {
   constructor(
-    public eventsStore: BFEventsStore,
-    public gamesRepository: GamesRepository,
-    public playersRepository: PlayersRepository,
-    public eventPublisher: EventPublisher,
+    @Inject(BFEventsStore) public eventsStore: BFEventsStore,
+    @Inject(GamesRepository) public gamesRepository: GamesRepository,
+    @Inject(PlayersRepository) public playersRepository: PlayersRepository,
+    @Inject(EventPublisher) public eventPublisher: EventPublisher,
   ) {}
 
-  public registerRoutes(router: Router): void {
-    router.post('/api/games', checkFirebaseAuthToken, (req, res) => this.createGame(req, res));
-    router.get('/api/games', checkFirebaseAuthToken, (req, res) => this.getGameList(req, res));
-    router.get('/api/games/:id', checkFirebaseAuthToken, (req, res) => this.getGame(req, res));
-    router.delete('/api/games/:id', checkFirebaseAuthToken, (req, res) => this.deleteGame(req, res));
-    router.post('/api/games/:id/start', checkFirebaseAuthToken, (req, res) => this.startGame(req, res));
-    router.post('/api/games/:id/end', checkFirebaseAuthToken, (req, res) => this.endGame(req, res));
-    router.post('/api/games/:id', checkFirebaseAuthToken, (req, res) => this.updateGame(req, res));
-
-    router.get('/api/games/:id/players', checkFirebaseAuthToken, (req, res) => this.getPlayersInGame(req, res));
-    router.post('/api/games/:id/players/:player/:team', checkFirebaseAuthToken, (req, res) => this.addPlayerToGame(req, res));
-    router.delete('/api/games/:id/players/:player', checkFirebaseAuthToken, (req, res) => this.removePlayerFromGame(req, res));
-    router.post('/api/games/:id/goals/:player', checkFirebaseAuthToken, (req, res) => this.addGoalFromPlayerToGame(req, res));
-    router.post('/api/games/:id/players/:player/position/:position', checkFirebaseAuthToken, (req, res) =>
-      this.changeUserPositionToGame(req, res),
-    );
-
-    // router.get('/api/games/:id/comments', checkFirebaseAuthToken, getCommentsOnGame);
-    // router.post('/api/games/:id/comments', checkFirebaseAuthToken, addCommentToGame);
-    // router.post('/api/games/:id/comments/:commentId', checkFirebaseAuthToken, changeCommentOnGame);
-    // router.delete('/api/games/:id/comments/:commentId', checkFirebaseAuthToken, removeCommentOnGame);
-
-    // router.get('/api/games/:id/reviews', checkFirebaseAuthToken, getReviewsOnGame);
-    // router.post('/api/games/:id/reviews', checkFirebaseAuthToken, addReviewOnGame);
-    // router.post('/api/games/:id/reviews/:reviewId', checkFirebaseAuthToken, updateReviewOnGame);
-    // router.delete('/api/games/:id/reviews/:reviewId', checkFirebaseAuthToken, removeReviewOnGame);
-  }
-
-  private createGame(req: Request, res: Response) {
+  @Post()
+  public createGame() {
     const id = generateUUID();
     // call COMMAND on Aggregate (this time it is a static method, because the Entity does not yet exist)
     Game.createGame(this.eventPublisher, id);
 
     // send response
-    res.status(201).send({
+    return {
       gameId: new GameId(id),
       // TODO: the HATEOAS links should be generated in some way given the state of the Game. Maybe it is a new ActionsOnGameProjection ?
       end: `/api/games/${encodeURIComponent(id)}/end`,
       start: `/api/games/${encodeURIComponent(id)}/start`,
       url: '/api/games/' + encodeURIComponent(id),
-    });
+    };
   }
 
-  private getGame(req: Request, res: Response) {
+  @Get(':id')
+  public getGame(@Param('id') id: string, @Query('_embedded') embedded?: string) {
     // create ID value type based on request parameters
-    const gameId = new GameId(req.params.id);
-    const embedded = req.query._embedded;
+    const gameId = new GameId(id);
 
     // call COMMAND on Aggregate (this time it is a static method, because the Entity does not yet exist)
     const found: Game = this.gamesRepository.getGame(gameId);
@@ -69,7 +45,7 @@ export class GamesRoutes {
       ? (list: Array<PlayerId>) => list.map(it => this.playersRepository.getPlayerFromList(it))
       : (list: Array<PlayerId>) => list;
     // send response
-    this.standardGameOKResponseWithAddedAttributes(res, gameId, {
+    return this.standardGameOKResponseWithAddedAttributes(gameId, {
       currentEndDatetime: found.projection.currentEndDatetime,
       currentStartDatetime: found.projection.currentStartDatetime,
       duration: found.projection.duration,
@@ -87,13 +63,14 @@ export class GamesRoutes {
     });
   }
 
-  private getGameList(req: Request, res: Response) {
+  @Get()
+  public getGameList() {
     // TODO : add _embedded option? (will be 1000 times slower)
 
     const all: Array<GameListItemProjection> = this.gamesRepository.getGames();
 
     // send response
-    res.status(200).send({
+    return {
       list: all.map(game => {
         return {
           created: game.timestamp,
@@ -103,62 +80,72 @@ export class GamesRoutes {
         };
       }),
       url: '/api/games',
-    });
+    };
   }
 
-  private startGame(req: Request, res: Response) {
+  @Post(':id/start')
+  @HttpCode(200)
+  public startGame(@Param('id') id: string) {
     const now = new Date();
     // create ID value type based on request parameters
-    const gameId = new GameId(req.params.id);
+    const gameId = new GameId(id);
     // find Aggregate for this ID in repository
     const game = this.gamesRepository.getGame(gameId);
     // call COMMAND on Aggregate
     game.startGame(this.eventPublisher);
 
-    this.standardGameOKResponseWithAddedAttributes(res, gameId, {
+    return this.standardGameOKResponseWithAddedAttributes(gameId, {
       end: `/api/games/${encodeURIComponent(gameId.id)}/end`,
       time: now,
     });
   }
 
-  private endGame(req: Request, res: Response) {
+  @Post(':id/end')
+  @HttpCode(200)
+  public endGame(@Param('id') id: string) {
     const now = new Date();
     // create ID value type based on request parameters
-    const gameId = new GameId(req.params.id);
+    const gameId = new GameId(id);
     // find Aggregate for this ID in repository
     const game = this.gamesRepository.getGame(gameId);
     // call COMMAND on Aggregate
     game.endGame(this.eventPublisher);
 
-    this.standardGameOKResponseWithAddedAttributes(res, gameId, { time: now });
+    return this.standardGameOKResponseWithAddedAttributes(gameId, { time: now });
   }
 
-  private updateGame(req: Request, res: Response) {
+  @Post(':id')
+  @HttpCode(200)
+  public updateGame(@Param('id') id: string, @Body() body: any = {}) {
     // create ID value type based on request parameters
-    const gameId = new GameId(req.params.id);
-    const initialDatetime = req.body.initialDatetime;
+    const gameId = new GameId(id);
+    const initialDatetime = body.initialDatetime;
     // find Aggregate for this ID in repository
     const game = this.gamesRepository.getGame(gameId);
     // call COMMAND on Aggregate
     game.updateInitialDateTime(this.eventPublisher, initialDatetime);
 
     // API User should make a GET after this. This endpoint does not send the updated Game projection.
-    this.standardGameOKResponseWithAddedAttributes(res, gameId, {
+    return this.standardGameOKResponseWithAddedAttributes(gameId, {
       end: `/api/games/${encodeURIComponent(gameId.id)}/end`,
       start: `/api/games/${encodeURIComponent(gameId.id)}/start`,
     });
   }
 
-  private deleteGame(req: Request, res: Response) {
-    const gameId = new GameId(req.params.id);
+  @Delete(':id')
+  public deleteGame(@Param('id') id: string) {
+    const gameId = new GameId(id);
     const game = this.gamesRepository.getGame(gameId);
     game.deleteGame(this.eventPublisher);
-    this.standardGameOKResponseWithAddedAttributes(res, gameId);
+
+    return this.standardGameOKResponseWithAddedAttributes(gameId);
   }
 
-  private addGoalFromPlayerToGame(req: Request, res: Response) {
-    const gameId = new GameId(req.params.id);
-    const playerId = new PlayerId(req.params.player);
+  @Post(':id/goals/:player')
+  @HttpCode(200)
+  public addGoalFromPlayerToGame(@Param('id') id: string, @Param('player') player: string) {
+    const gameId = new GameId(id);
+    const playerId = new PlayerId(player);
 
     // find Aggregate for this ID in repository
     const game = this.gamesRepository.getGame(gameId);
@@ -166,17 +153,17 @@ export class GamesRoutes {
     // call COMMAND on Aggregate
     game.addGoalFromPlayer(this.eventPublisher, playerId);
 
-    this.standardGameOKResponseWithAddedAttributes(res, gameId, { playerId });
+    return this.standardGameOKResponseWithAddedAttributes(gameId, { playerId });
   }
 
-  private getPlayersInGame(req: Request, res: Response) {
-    const gameId = new GameId(req.params.id);
+  @Get(':id/players')
+  public getPlayersInGame(@Param('id') id: string) {
+    const gameId = new GameId(id);
 
     // find Aggregate for this ID in repository
     const found = this.gamesRepository.getGame(gameId);
 
-    this.standardGameOKResponseWithAddedAttributes(
-      res,
+    return this.standardGameOKResponseWithAddedAttributes(
       gameId,
       {
         players: found.projection.players,
@@ -190,23 +177,26 @@ export class GamesRoutes {
     );
   }
 
-  private addPlayerToGame(req: Request, res: Response) {
-    const gameId = new GameId(req.params.id);
-    const playerId = new PlayerId(req.params.player);
-    const team: TeamColors = req.params.team as TeamColors;
+  @Post(':id/players/:player/:team')
+  @HttpCode(200)
+  public addPlayerToGame(@Param('id') id: string, @Param('player') player: string, @Param('team') team: string) {
+    const gameId = new GameId(id);
+    const playerId = new PlayerId(player);
+    const teamColor: TeamColors = team as TeamColors;
 
     // find Aggregate for this ID in repository
     const found = this.gamesRepository.getGame(gameId);
 
     // call COMMAND on Aggregate
-    found.addPlayerToGame(this.eventPublisher, playerId, team);
+    found.addPlayerToGame(this.eventPublisher, playerId, teamColor);
 
-    this.standardGameOKResponseWithAddedAttributes(res, gameId, { playerId, team }, '/players');
+    return this.standardGameOKResponseWithAddedAttributes(gameId, { playerId, team: teamColor }, '/players');
   }
 
-  private removePlayerFromGame(req: Request, res: Response) {
-    const gameId = new GameId(req.params.id);
-    const playerId = new PlayerId(req.params.player);
+  @Delete(':id/players/:player')
+  public removePlayerFromGame(@Param('id') id: string, @Param('player') player: string) {
+    const gameId = new GameId(id);
+    const playerId = new PlayerId(player);
 
     // find Aggregate for this ID in repository
     const found = this.gamesRepository.getGame(gameId);
@@ -214,13 +204,19 @@ export class GamesRoutes {
     // call COMMAND on Aggregate
     found.removePlayerFromGame(this.eventPublisher, playerId);
 
-    this.standardGameOKResponseWithAddedAttributes(res, gameId, { playerId }, '/players');
+    return this.standardGameOKResponseWithAddedAttributes(gameId, { playerId }, '/players');
   }
 
-  private changeUserPositionToGame(req: Request, res: Response) {
-    const gameId = new GameId(req.params.id);
-    const player = new PlayerId(req.params.player);
-    const position: PositionValue = req.params.position as PositionValue;
+  @Post(':id/players/:player/position/:position')
+  @HttpCode(200)
+  public changeUserPositionToGame(
+    @Param('id') id: string,
+    @Param('player') playerParam: string,
+    @Param('position') positionParam: string,
+  ) {
+    const gameId = new GameId(id);
+    const player = new PlayerId(playerParam);
+    const position: PositionValue = positionParam as PositionValue;
 
     // find Aggregate for this ID in repository
     const found = this.gamesRepository.getGame(gameId);
@@ -228,22 +224,31 @@ export class GamesRoutes {
     // call COMMAND on Aggregate
     found.changeUserPositionOnGame(this.eventPublisher, player, position);
 
-    this.standardGameOKResponseWithAddedAttributes(res, gameId, {
+    return this.standardGameOKResponseWithAddedAttributes(gameId, {
       player,
       position,
     });
   }
 
+  // @Get(':id/comments') getCommentsOnGame
+  // @Post(':id/comments') addCommentToGame
+  // @Post(':id/comments/:commentId') changeCommentOnGame
+  // @Delete(':id/comments/:commentId') removeCommentOnGame
+
+  // @Get(':id/reviews') getReviewsOnGame
+  // @Post(':id/reviews') addReviewOnGame
+  // @Post(':id/reviews/:reviewId') updateReviewOnGame
+  // @Delete(':id/reviews/:reviewId') removeReviewOnGame
+
   private standardGameOKResponseWithAddedAttributes(
-    res: Response,
     gameId: GameId,
     addThisToTheBody: any = {},
     context: string = '',
-  ): void {
-    res.status(200).send({
+  ): any {
+    return {
       gameId,
       ...addThisToTheBody, // destructuring FTW! \o/
       url: `/api/games/${encodeURIComponent(gameId.id)}${context}`,
-    });
+    };
   }
 }
